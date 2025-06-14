@@ -2,7 +2,7 @@ import { sveltekit } from '@sveltejs/kit/vite';
 
 /** @type {import('vite').UserConfig} */
 const config = {
-	plugins: [
+  plugins: [
     sveltekit(),
     // ClassMangler({
     //   // dev: true
@@ -22,12 +22,15 @@ const config = {
     }
   ],
   build: {
-    sourcemap: true
+    sourcemap: true,
+    rollupOptions: {
+      external: ['@iconify/svelte@2.2.1']
+    }
   },
-	test: {
-		include: ['src/**/*.{test,spec}.{js,ts}']
-	},
-	server: {
+  test: {
+    include: ['src/**/*.{test,spec}.{js,ts}']
+  },
+  server: {
     fs: {
       // throws an error without this when importing Fira font
       allow: ['..', 'node_modules/@fontsource/fira-code']
