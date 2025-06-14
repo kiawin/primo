@@ -22,10 +22,7 @@ const config = {
     }
   ],
   build: {
-    sourcemap: true,
-    rollupOptions: {
-      external: ['@iconify/svelte@2.2.1']
-    }
+    sourcemap: true
   },
   test: {
     include: ['src/**/*.{test,spec}.{js,ts}']
