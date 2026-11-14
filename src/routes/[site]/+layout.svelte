@@ -34,7 +34,8 @@
 			// Vercel, measured after JSON escaping); images count by their real size so large ones
 			// get a request of their own, but their data is downloaded server-side
 			const chunks = chunk_payload(payload, 2000)
-			const blob_lists = await Promise.all(chunks.map(create_blob_list))
+			// a couple of requests at a time: GitHub rate-limits bursts of blob uploads
+			const blob_lists = await map_with_concurrency(chunks, 2, create_blob_list)
 			if (blob_lists.some((list) => !Array.isArray(list))) {
 				console.log('Deployment error: could not upload all files, nothing was deployed')
 				return null
@@ -48,10 +49,23 @@
 
 			async function create_blob_list(chunk) {
 				const { data } = await axios.post('/api/deploy/blobs', chunk).catch((e) => {
-					console.error({ e })
+					console.error('Upload error:', e.response?.data?.error || e.message)
 					return { data: null }
 				})
 				return data
+			}
+
+			async function map_with_concurrency(items, limit, fn) {
+				const results = new Array(items.length)
+				let next = 0
+				async function worker() {
+					while (next < items.length) {
+						const i = next++
+						results[i] = await fn(items[i])
+					}
+				}
+				await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+				return results
 			}
 
 			function chunk_payload(payload, max_size) {

@@ -198,7 +198,8 @@ const gitlab = {
     const { data } = await axios.post(
       `https://gitlab.com/api/v4/projects/${project_id}/repository/commits`,
       { branch: 'main', commit_message: message, actions },
-      { headers }
+      // axios caps request bodies at 10MB in Node; a commit with images can be bigger
+      { headers, maxBodyLength: Infinity, maxContentLength: Infinity }
     )
 
     console.log('Commit successful:', data)
