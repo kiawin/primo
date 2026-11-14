@@ -66,7 +66,13 @@ export async function localize_images(files, { storage_url }) {
     if (file.storage_key || UNTOUCHED_FILES.includes(file.file)) return file
     let data = file.data
     for (const [url, { src }] of replacements) {
-      if (data.includes(url)) data = data.split(url).join(src)
+      // in HTML attributes `&` is written as `&amp;`, so replace that spelling too
+      for (const [from, to] of [
+        [url, src],
+        [escape_html(url), escape_html(src)],
+      ]) {
+        if (data.includes(from)) data = data.split(from).join(to)
+      }
     }
     if (data === file.data) return file
     return {
@@ -108,13 +114,13 @@ function collect_image_urls(files, storage_url) {
   }
 
   const pattern = new RegExp(
-    escape_regex(storage_url) + '[^\\s"\'`<>\\\\?#&]+',
+    escape_regex(storage_url) + '[^\\s"\'`<>\\\\?#]+',
     'g'
   )
   for (const file of files) {
     if (file.storage_key || file.file === 'primo.json') continue
     for (const match of file.data.matchAll(pattern))
-      urls.add(trim_unbalanced_parens(match[0]))
+      urls.add(trim_unbalanced_parens(unescape_html(match[0])))
   }
 
   // the regex stops at whitespace etc., so drop partial matches of longer URLs
@@ -132,6 +138,14 @@ function trim_unbalanced_parens(url) {
   while (url.endsWith(')') && count(url, ')') > count(url, '('))
     url = url.slice(0, -1)
   return url
+}
+
+function escape_html(str) {
+  return str.replaceAll('&', '&amp;')
+}
+
+function unescape_html(str) {
+  return str.replaceAll('&amp;', '&')
 }
 
 function count(str, char) {
