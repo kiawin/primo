@@ -3,8 +3,12 @@
 //
 // Every page/symbol file in the bundle is scanned for public Supabase image URLs,
 // e.g. https://<project>.supabase.co/storage/v1/object/public/images/<site>/<file>.
-// Each image is downloaded, added to the bundle as `_images/<site>/<file>`, and the
-// URL is rewritten to `/_images/<site>/<file>` (root-relative, like `/_symbols/`).
+// Each URL is rewritten to `/_images/<site>/<file>` (root-relative, like `/_symbols/`)
+// and an image entry is added to the bundle as `_images/<site>/<file>`.
+//
+// Image entries carry only the storage key (`storage_key`), not the image data: the
+// deploy endpoints download the image from Supabase server-side, so large images
+// don't have to fit in the request body sent from the browser.
 //
 // `primo.json` is intentionally left untouched so a re-imported site keeps working
 // in the editor with the original Supabase URLs.
@@ -12,12 +16,14 @@
 const BUNDLE_DIR = '_images'
 const UNTOUCHED_FILES = ['primo.json']
 
-// Images bigger than this are left on Supabase: the deploy API receives files in
-// request bodies that are capped (~4.5MB on Vercel) and base64 adds ~33%.
-const MAX_IMAGE_BYTES = 3 * 1024 * 1024
-
 /**
- * @typedef {{file: string, data: string, size: number, encoding?: 'utf-8' | 'base64'}} BundleFile
+ * @typedef {{
+ *   file: string,
+ *   data?: string,
+ *   size: number,
+ *   encoding?: 'utf-8' | 'base64',
+ *   storage_key?: string
+ * }} BundleFile
  */
 
 /**
@@ -33,15 +39,17 @@ export async function localize_images(files, { storage_url }) {
   const images = new Map()
   await Promise.all(
     [...urls].map(async (url) => {
+      const size = await check_image(url)
+      if (size === null) return
       const key = url.slice(storage_url.length)
-      const base64 = await download_as_base64(url)
-      if (base64 === null) return
+      const storage_key = safe_decode(key)
       images.set(url, {
         src: `/${BUNDLE_DIR}/${key}`,
         file: {
-          file: `${BUNDLE_DIR}/${safe_decode(key)}`,
-          data: base64,
-          size: base64.length / 1024,
+          file: `${BUNDLE_DIR}/${storage_key}`,
+          storage_key,
+          // used to split the deploy into requests; the data itself is fetched server-side
+          size: size / 1024,
           encoding: 'base64',
         },
       })
@@ -55,8 +63,7 @@ export async function localize_images(files, { storage_url }) {
   )
 
   const rewritten = files.map((file) => {
-    if (file.encoding === 'base64' || UNTOUCHED_FILES.includes(file.file))
-      return file
+    if (file.storage_key || UNTOUCHED_FILES.includes(file.file)) return file
     let data = file.data
     for (const [url, { src }] of replacements) {
       if (data.includes(url)) data = data.split(url).join(src)
@@ -78,7 +85,7 @@ export async function localize_images(files, { storage_url }) {
 
 /**
  * Finds Supabase image URLs in the bundle, from two places:
- *  - string values in primo.json (exact values, so file names with spaces work)
+ *  - string values in primo.json (exact values, so any file name works)
  *  - a regex scan of every text file (catches URLs hard-coded in component code)
  */
 function collect_image_urls(files, storage_url) {
@@ -101,20 +108,34 @@ function collect_image_urls(files, storage_url) {
   }
 
   const pattern = new RegExp(
-    escape_regex(storage_url) + '[^\\s"\'`<>()\\\\?#&]+',
+    escape_regex(storage_url) + '[^\\s"\'`<>\\\\?#&]+',
     'g'
   )
   for (const file of files) {
-    if (file.encoding === 'base64') continue
-    for (const match of file.data.matchAll(pattern)) urls.add(match[0])
+    if (file.storage_key || file.file === 'primo.json') continue
+    for (const match of file.data.matchAll(pattern))
+      urls.add(trim_unbalanced_parens(match[0]))
   }
 
-  // the regex stops at whitespace, so drop partial matches of file names with spaces
-  for (const url of urls) {
-    if ([...urls].some((other) => other.startsWith(url + ' '))) urls.delete(url)
+  // the regex stops at whitespace etc., so drop partial matches of longer URLs
+  const all = [...urls]
+  for (const url of all) {
+    if (all.some((other) => other !== url && other.startsWith(url)))
+      urls.delete(url)
   }
 
   return urls
+}
+
+// `url(https://…/a.jpg)` in CSS: drop the closing paren but keep ones in file names like `a (1).jpg`
+function trim_unbalanced_parens(url) {
+  while (url.endsWith(')') && count(url, ')') > count(url, '('))
+    url = url.slice(0, -1)
+  return url
+}
+
+function count(str, char) {
+  return str.split(char).length - 1
 }
 
 function walk_strings(value, fn) {
@@ -124,37 +145,25 @@ function walk_strings(value, fn) {
     Object.values(value).forEach((v) => walk_strings(v, fn))
 }
 
-/** @returns {Promise<string | null>} */
-async function download_as_base64(url) {
+/**
+ * Checks the image exists and returns its size in bytes (0 if unknown), or null if it doesn't.
+ * @returns {Promise<number | null>}
+ */
+async function check_image(url) {
   try {
-    const res = await fetch(url)
+    let res = await fetch(url, { method: 'HEAD' })
+    if (res.status === 405) res = await fetch(url)
     if (!res.ok) {
       console.warn(
-        `Could not download image ${url} (${res.status}), keeping remote URL`
+        `Could not find image ${url} (${res.status}), keeping remote URL`
       )
       return null
     }
-    const blob = await res.blob()
-    if (blob.size > MAX_IMAGE_BYTES) {
-      console.warn(
-        `Image ${url} is larger than ${MAX_IMAGE_BYTES} bytes, keeping remote URL`
-      )
-      return null
-    }
-    return await blob_to_base64(blob)
+    return Number(res.headers.get('content-length')) || 0
   } catch (e) {
-    console.warn(`Could not download image ${url}, keeping remote URL`, e)
+    console.warn(`Could not check image ${url}, keeping remote URL`, e)
     return null
   }
-}
-
-function blob_to_base64(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
-    reader.onerror = () => reject(reader.error)
-    reader.readAsDataURL(blob)
-  })
 }
 
 function safe_decode(str) {

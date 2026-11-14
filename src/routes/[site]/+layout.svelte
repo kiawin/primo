@@ -30,8 +30,16 @@
 		}
 
 		if (payload.provider === 'github') {
-			const chunks = chunk_payload(payload, 4500) // break payload up into chunks to avoid cloud function body limits
-			const blob_list = (await Promise.all(chunks.map(create_blob_list))).flat()
+			// break payload up into chunks to stay well under cloud function body limits (4.5MB on
+			// Vercel, measured after JSON escaping); images count by their real size so large ones
+			// get a request of their own, but their data is downloaded server-side
+			const chunks = chunk_payload(payload, 2000)
+			const blob_lists = await Promise.all(chunks.map(create_blob_list))
+			if (blob_lists.some((list) => !Array.isArray(list))) {
+				console.log('Deployment error: could not upload all files, nothing was deployed')
+				return null
+			}
+			const blob_list = blob_lists.flat()
 			return await deploy_to_server({
 				...payload,
 				files: blob_list,
@@ -72,6 +80,7 @@
 				files: payload.files.map((file) => ({
 					path: file.file,
 					content: file.data,
+					storage_key: file.storage_key,
 					encoding: file.encoding || 'text'
 				})),
 				message: `Deploy site`
