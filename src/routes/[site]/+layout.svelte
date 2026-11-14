@@ -31,11 +31,11 @@
 
 		if (payload.provider === 'github') {
 			// break payload up into chunks to stay well under cloud function body limits (4.5MB on
-			// Vercel, measured after JSON escaping); images count by their real size so large ones
-			// get a request of their own, but their data is downloaded server-side
+			// Vercel, measured after JSON escaping) and time limits: every image gets a request of
+			// its own, since the server downloads and uploads it within that request
 			const chunks = chunk_payload(payload, 2000)
-			// a couple of requests at a time: GitHub rate-limits bursts of blob uploads
-			const blob_lists = await map_with_concurrency(chunks, 2, create_blob_list)
+			// a few requests at a time: GitHub rate-limits bursts of blob uploads
+			const blob_lists = await map_with_concurrency(chunks, 3, create_blob_list)
 			if (blob_lists.some((list) => !Array.isArray(list))) {
 				console.log('Deployment error: could not upload all files, nothing was deployed')
 				return null
@@ -70,7 +70,12 @@
 
 			function chunk_payload(payload, max_size) {
 				const chunks = []
+				const image_chunks = []
 				payload.files.forEach((file) => {
+					if (file.storage_key) {
+						image_chunks.push({ ...payload, files: [file] })
+						return
+					}
 					const current_chunk = chunks[chunks.length - 1]
 					const current_chunk_size = current_chunk
 						? current_chunk.files.reduce((acc, f) => acc + f.size, 0)
@@ -86,7 +91,7 @@
 						})
 					}
 				})
-				return chunks
+				return [...chunks, ...image_chunks]
 			}
 		} else if (payload.provider === 'gitlab') {
 			return await deploy_to_server({

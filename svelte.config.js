@@ -12,7 +12,10 @@ const config = {
 		// Set the runtime explicitly: the adapter only auto-detects Node 16/18/20,
 		// and Vercel now builds with the version in package.json "engines".
 		adapter: adapter({
-			runtime: `nodejs${process.versions.node.split('.')[0]}.x`
+			runtime: `nodejs${process.versions.node.split('.')[0]}.x`,
+			// deploy endpoints download images and upload them to GitHub; the default limit
+			// (10s on some plans) is too short for that. 60s is allowed on every plan.
+			maxDuration: 60
 		})
 	},
 	vitePlugin: {
