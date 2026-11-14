@@ -2,6 +2,7 @@
 	import _ from 'lodash'
 	import Primo, { database_subscribe, storage_subscribe, deploy_subscribe } from '@primocms/builder'
 	import axios from 'axios'
+	import { localize_images } from '$lib/deploy/localize_images'
 
 	export let data
 
@@ -10,7 +11,13 @@
 	deploy_subscribe(async (untyped_payload, create_new) => {
 		// workaround because adding the type next to the argument throws a parsing error (?)
 		/** @type {import('@primocms/builder/src/lib/deploy.js').DeploymentPayload} */
-		const payload = untyped_payload
+		const payload = {
+			...untyped_payload,
+			// copy Supabase-hosted images into the bundle instead of hot-linking them
+			files: await localize_images(untyped_payload.files, {
+				storage_url: supabase.storage.from('images').getPublicUrl('').data.publicUrl.replace(/\/?$/, '/')
+			})
+		}
 
 		if (create_new) {
 			await deploy_to_server({
@@ -44,7 +51,7 @@
 				payload.files.forEach((file) => {
 					const current_chunk = chunks[chunks.length - 1]
 					const current_chunk_size = current_chunk
-						? current_chunk.files.reduce((acc, payload) => acc + file.size, 0)
+						? current_chunk.files.reduce((acc, f) => acc + f.size, 0)
 						: 0
 					if (current_chunk && current_chunk_size + file.size < max_size) {
 						// current chunk below limit
@@ -64,7 +71,8 @@
 				...payload,
 				files: payload.files.map((file) => ({
 					path: file.file,
-					content: file.data
+					content: file.data,
+					encoding: file.encoding || 'text'
 				})),
 				message: `Deploy site`
 			})
