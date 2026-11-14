@@ -21,6 +21,7 @@ export async function POST({ request, locals }) {
     files.map(async (file) => {
       const blob_sha = await create_blob({
         content: file.data,
+        encoding: file.encoding,
         token: token?.value,
         repo_name,
       })
@@ -34,12 +35,12 @@ export async function POST({ request, locals }) {
   return json(res)
 }
 
-async function create_blob({ content, repo_name, token }) {
+async function create_blob({ content, encoding = 'utf-8', repo_name, token }) {
   const { data } = await axios.post(
     `https://api.github.com/repos/${repo_name}/git/blobs`,
     {
       content,
-      encoding: 'utf-8',
+      encoding,
     },
     {
       headers: { Authorization: `Bearer ${token}` },

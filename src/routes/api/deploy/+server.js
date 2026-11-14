@@ -185,6 +185,7 @@ const gitlab = {
       action: existing_files.includes(file.path) ? 'update' : 'create',
       file_path: file.path,
       content: file.content,
+      encoding: file.encoding === 'base64' ? 'base64' : 'text',
     }))
 
     const { data } = await axios.post(
