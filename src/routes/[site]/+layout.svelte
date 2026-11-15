@@ -2,7 +2,7 @@
 	import _ from 'lodash'
 	import Primo, { database_subscribe, storage_subscribe, deploy_subscribe } from '@primocms/builder'
 	import axios from 'axios'
-	import { localize_images } from '$lib/deploy/localize_images'
+	import { localize_images, is_remote_file } from '$lib/deploy/localize_images'
 
 	export let data
 
@@ -72,7 +72,7 @@
 				const chunks = []
 				const image_chunks = []
 				payload.files.forEach((file) => {
-					if (file.storage_key) {
+					if (is_remote_file(file)) {
 						image_chunks.push({ ...payload, files: [file] })
 						return
 					}
@@ -100,6 +100,7 @@
 					path: file.file,
 					content: file.data,
 					storage_key: file.storage_key,
+					remote_url: file.remote_url,
 					encoding: file.encoding || 'text'
 				})),
 				message: `Deploy site`

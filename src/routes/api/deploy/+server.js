@@ -1,7 +1,7 @@
 import { json, error as server_error } from '@sveltejs/kit'
 import supabase_admin from '$lib/supabase/admin'
 import axios from 'axios'
-import { download_image_base64 } from '$lib/server/storage_images'
+import { download_remote_file } from '$lib/server/storage_images'
 
 export async function POST({ request, locals }) {
   const session = await locals.getSession()
@@ -183,16 +183,17 @@ const gitlab = {
     const existing_files = await fetch_file_list(project_id)
 
     const actions = await Promise.all(
-      files.map(async (file) => ({
-        action: existing_files.includes(file.path) ? 'update' : 'create',
-        file_path: file.path,
-        // images are sent as a storage key and downloaded here
-        content: file.storage_key
-          ? await download_image_base64(file.storage_key)
-          : file.content,
-        encoding:
-          file.storage_key || file.encoding === 'base64' ? 'base64' : 'text',
-      }))
+      files.map(async (file) => {
+        // images are sent by reference and downloaded here
+        const remote = await download_remote_file(file)
+        return {
+          action: existing_files.includes(file.path) ? 'update' : 'create',
+          file_path: file.path,
+          content: remote ?? file.content,
+          encoding:
+            remote !== null || file.encoding === 'base64' ? 'base64' : 'text',
+        }
+      })
     )
 
     const { data } = await axios.post(

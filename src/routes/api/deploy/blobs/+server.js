@@ -2,7 +2,7 @@ import { json, error as server_error } from '@sveltejs/kit'
 import { createHash } from 'node:crypto'
 import supabase_admin from '$lib/supabase/admin'
 import axios from 'axios'
-import { download_image_base64 } from '$lib/server/storage_images'
+import { download_remote_file } from '$lib/server/storage_images'
 
 // files uploaded in parallel within one request; kept low because GitHub
 // rate-limits bursts of content-creating requests
@@ -31,11 +31,10 @@ export async function POST({ request, locals }) {
 
     const res = await map_with_concurrency(files, CONCURRENCY, async (file) => {
       try {
-        // images are sent as a storage key and downloaded here, to keep request bodies small
-        const content = file.storage_key
-          ? await download_image_base64(file.storage_key)
-          : file.data
-        const encoding = file.storage_key ? 'base64' : file.encoding || 'utf-8'
+        // images are sent by reference and downloaded here, to keep request bodies small
+        const remote = await download_remote_file(file)
+        const content = remote ?? file.data
+        const encoding = remote !== null ? 'base64' : file.encoding || 'utf-8'
 
         const sha = git_blob_sha(content, encoding)
         if (!existing.has(sha)) {
