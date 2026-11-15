@@ -1,6 +1,7 @@
 import { json, error as server_error } from '@sveltejs/kit'
 import supabase_admin from '$lib/supabase/admin'
 import axios from 'axios'
+import { download_remote_file } from '$lib/server/storage_images'
 
 export async function POST({ request, locals }) {
   const session = await locals.getSession()
@@ -181,17 +182,25 @@ const gitlab = {
     const headers = { 'PRIVATE-TOKEN': token }
     const existing_files = await fetch_file_list(project_id)
 
-    const actions = files.map((file) => ({
-      action: existing_files.includes(file.path) ? 'update' : 'create',
-      file_path: file.path,
-      content: file.content,
-      encoding: file.encoding === 'base64' ? 'base64' : 'text',
-    }))
+    const actions = await Promise.all(
+      files.map(async (file) => {
+        // images are sent by reference and downloaded here
+        const remote = await download_remote_file(file)
+        return {
+          action: existing_files.includes(file.path) ? 'update' : 'create',
+          file_path: file.path,
+          content: remote ?? file.content,
+          encoding:
+            remote !== null || file.encoding === 'base64' ? 'base64' : 'text',
+        }
+      })
+    )
 
     const { data } = await axios.post(
       `https://gitlab.com/api/v4/projects/${project_id}/repository/commits`,
       { branch: 'main', commit_message: message, actions },
-      { headers }
+      // axios caps request bodies at 10MB in Node; a commit with images can be bigger
+      { headers, maxBodyLength: Infinity, maxContentLength: Infinity }
     )
 
     console.log('Commit successful:', data)

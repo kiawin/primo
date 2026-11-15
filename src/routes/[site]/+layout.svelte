@@ -2,7 +2,7 @@
 	import _ from 'lodash'
 	import Primo, { database_subscribe, storage_subscribe, deploy_subscribe } from '@primocms/builder'
 	import axios from 'axios'
-	import { localize_images } from '$lib/deploy/localize_images'
+	import { localize_images, is_remote_file } from '$lib/deploy/localize_images'
 
 	export let data
 
@@ -30,8 +30,17 @@
 		}
 
 		if (payload.provider === 'github') {
-			const chunks = chunk_payload(payload, 4500) // break payload up into chunks to avoid cloud function body limits
-			const blob_list = (await Promise.all(chunks.map(create_blob_list))).flat()
+			// break payload up into chunks to stay well under cloud function body limits (4.5MB on
+			// Vercel, measured after JSON escaping) and time limits: every image gets a request of
+			// its own, since the server downloads and uploads it within that request
+			const chunks = chunk_payload(payload, 2000)
+			// a few requests at a time: GitHub rate-limits bursts of blob uploads
+			const blob_lists = await map_with_concurrency(chunks, 3, create_blob_list)
+			if (blob_lists.some((list) => !Array.isArray(list))) {
+				console.log('Deployment error: could not upload all files, nothing was deployed')
+				return null
+			}
+			const blob_list = blob_lists.flat()
 			return await deploy_to_server({
 				...payload,
 				files: blob_list,
@@ -40,15 +49,33 @@
 
 			async function create_blob_list(chunk) {
 				const { data } = await axios.post('/api/deploy/blobs', chunk).catch((e) => {
-					console.error({ e })
+					console.error('Upload error:', e.response?.data?.error || e.message)
 					return { data: null }
 				})
 				return data
 			}
 
+			async function map_with_concurrency(items, limit, fn) {
+				const results = new Array(items.length)
+				let next = 0
+				async function worker() {
+					while (next < items.length) {
+						const i = next++
+						results[i] = await fn(items[i])
+					}
+				}
+				await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker))
+				return results
+			}
+
 			function chunk_payload(payload, max_size) {
 				const chunks = []
+				const image_chunks = []
 				payload.files.forEach((file) => {
+					if (is_remote_file(file)) {
+						image_chunks.push({ ...payload, files: [file] })
+						return
+					}
 					const current_chunk = chunks[chunks.length - 1]
 					const current_chunk_size = current_chunk
 						? current_chunk.files.reduce((acc, f) => acc + f.size, 0)
@@ -64,7 +91,7 @@
 						})
 					}
 				})
-				return chunks
+				return [...chunks, ...image_chunks]
 			}
 		} else if (payload.provider === 'gitlab') {
 			return await deploy_to_server({
@@ -72,6 +99,8 @@
 				files: payload.files.map((file) => ({
 					path: file.file,
 					content: file.data,
+					storage_key: file.storage_key,
+					remote_url: file.remote_url,
 					encoding: file.encoding || 'text'
 				})),
 				message: `Deploy site`
